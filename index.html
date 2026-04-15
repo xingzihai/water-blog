@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="xingzihai - 星光落入冰水，温暖慢慢渗透">
+  <title>xingzihai · 冰水泡枸杞</title>
+  
+  <!-- 预连接 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  
+  <!-- 字体加载 -->
+  <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Inter:wght@400;500;600&family=Noto+Serif+SC:wght@400;500;600;700&family=Noto+Sans+SC:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
+  
+  <!-- 主样式 -->
+  <link rel="stylesheet" href="style.css">
+  
+  <!-- 水效果样式 -->
+  <style>
+    /* 水效果背景层 */
+    #water-canvas {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      z-index: 0;
+      pointer-events: none;
+    }
+    
+    /* 内容层浮在水效果上方 */
+    .surface-world {
+      position: relative;
+      z-index: 10;
+    }
+    
+    /* 水效果控制面板 */
+    .water-control {
+      position: fixed;
+      bottom: 20px;
+      left: 20px;
+      background: rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(10px);
+      padding: 15px 20px;
+      border-radius: 12px;
+      z-index: 100;
+      font-family: 'Inter', sans-serif;
+      color: rgba(255, 255, 255, 0.9);
+      transition: all 0.3s ease;
+    }
+    
+    .water-control:hover {
+      background: rgba(255, 255, 255, 0.25);
+    }
+    
+    .water-control h4 {
+      margin: 0 0 10px 0;
+      font-size: 14px;
+      font-weight: 600;
+      opacity: 0.9;
+    }
+    
+    .water-control label {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 8px 0;
+      font-size: 12px;
+    }
+    
+    .water-control input[type="range"] {
+      width: 120px;
+      height: 4px;
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+    
+    .water-control input[type="range"]::-webkit-slider-thumb {
+      width: 14px;
+      height: 14px;
+      background: rgba(255, 255, 255, 0.8);
+      border-radius: 50%;
+      cursor: pointer;
+    }
+    
+    .water-control .value-display {
+      font-size: 11px;
+      opacity: 0.7;
+      min-width: 30px;
+    }
+    
+    .water-control .toggle-btn {
+      background: rgba(255, 255, 255, 0.2);
+      border: none;
+      padding: 5px 12px;
+      border-radius: 6px;
+      color: inherit;
+      font-size: 11px;
+      cursor: pointer;
+      margin-top: 10px;
+      transition: background 0.2s;
+    }
+    
+    .water-control .toggle-btn:hover {
+      background: rgba(255, 255, 255, 0.35);
+    }
+    
+    /* 隐藏原始 WebGL 帮助面板 */
+    #help { display: none; }
+    #loading { display: none; }
+    
+    /* 图片资源隐藏但加载 */
+    .water-resources {
+      display: none;
+    }
+  </style>
+</head>
+<body>
+  <!-- 水效果背景（WebGL Canvas） -->
+  <canvas id="water-canvas"></canvas>
+  
+  <!-- 水效果资源图片（隐藏但需要加载） -->
+  <div class="water-resources">
+    <img id="xneg" src="water-assets/xneg.jpg">
+    <img id="xpos" src="water-assets/xpos.jpg">
+    <img id="ypos" src="water-assets/ypos.jpg">
+    <img id="zneg" src="water-assets/zneg.jpg">
+    <img id="zpos" src="water-assets/zpos.jpg">
+    <img id="tiles" src="water-assets/tiles.jpg">
+  </div>
+  
+  <!-- 水效果控制面板 -->
+  <div class="water-control">
+    <h4>🌊 水效果设置</h4>
+    <label>
+      <span>水层深度</span>
+      <input type="range" id="water-depth" min="-1.5" max="2" step="0.1" value="0.2">
+      <span class="value-display" id="depth-value">0.2</span>
+    </label>
+    <label>
+      <span>涟漪强度</span>
+      <input type="range" id="ripple-strength" min="0.005" max="0.05" step="0.005" value="0.01">
+      <span class="value-display" id="ripple-value">0.01</span>
+    </label>
+    <label>
+      <span>透明度</span>
+      <input type="range" id="water-opacity" min="0.1" max="1" step="0.1" value="0.7">
+      <span class="value-display" id="opacity-value">70%</span>
+    </label>
+    <button class="toggle-btn" id="toggle-water">关闭水效果</button>
+  </div>
+  
+  <!-- ========== 原始网页内容 ========== -->
+  <div class="surface-world">
+    <!-- 导航栏 -->
+    <nav class="site-nav">
+    <div class="nav-container">
+      <a href="#hero" class="nav-logo">xingzihai</a>
+      <div class="nav-links">
+        <a href="#gallery" class="nav-link">作品</a>
+        <a href="#philosophy" class="nav-link">理念</a>
+        <a href="#skills" class="nav-link">技术</a>
+        <a href="#contact" class="nav-link">联系</a>
+      </div>
+      <button class="nav-toggle" aria-label="菜单">
+        <span></span>
+        <span></span>
+        <span></span>
+      </button>
+    </div>
+  </nav>
+  
+  <!-- ========== Hero 区 ========== -->
+  <section id="hero" class="hero">
+    <!-- 背景光影流动 -->
+    <div class="hero-light-flow"></div>
+    
+    <!-- 光斑粒子 -->
+    <div class="hero-particles">
+      <span class="particle p1"></span>
+      <span class="particle p2"></span>
+      <span class="particle p3"></span>
+      <span class="particle p4"></span>
+      <span class="particle p5"></span>
+    </div>
+    
+    <!-- 萤火虫粒子 -->
+    <div class="firefly-container"></div>
+    
+    <!-- 内容 -->
+    <div class="hero-content">
+      <!-- 动态头像 -->
+      <div class="avatar-container">
+        <div class="avatar-aura"></div>
+        <div class="avatar-transition"></div>
+        <div class="avatar-crystal-wrapper">
+          <div class="avatar-crystal">
+            <span class="crystal-face f1"></span>
+            <span class="crystal-face f2"></span>
+            <span class="crystal-face f3"></span>
+            <span class="crystal-face f4"></span>
+            <span class="crystal-face f5"></span>
+            <span class="crystal-face f6"></span>
+            <span class="crystal-top"></span>
+            <span class="crystal-bottom"></span>
+          </div>
+          <div class="avatar-core">
+            <span class="core-inner"></span>
+          </div>
+        </div>
+        <div class="avatar-glow"></div>
+      </div>
+      
+      <!-- 标识 -->
+      <div class="hero-identity">
+        <h1 class="hero-name">xingzihai</h1>
+        <p class="hero-name-cn">冰水泡枸杞</p>
+        <p class="hero-tagline">星光落入冰水，温暖慢慢渗透</p>
+      </div>
+    </div>
+    
+    <!-- 滚动提示 -->
+    <div class="scroll-hint">
+      <div class="scroll-arrow"></div>
+    </div>
+  </section>
+  </div>
+
+  <!-- 水效果脚本 -->
+  <script src="water-assets/OES_texture_float_linear-polyfill.js"></script>
+  <script src="water-assets/lightgl.js"></script>
+  <script src="water-assets/cubemap.js"></script>
+  <script src="water-assets/renderer.js"></script>
+  <script src="water-assets/water.js"></script>
+  <script src="water-assets/integration.js"></script>
+  
+  <!-- 原始脚本 -->
+  <script src="scripts/main.js"></script>
+</body>
+</html>
