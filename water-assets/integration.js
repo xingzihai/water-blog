@@ -1,231 +1,237 @@
 /*
- * Water Effect Integration for Personal Website
- * Based on WebGL Water by Evan Wallace
- * Modified for background use with custom depth control
+ * 简单水波涟漪背景效果
+ * 不依赖复杂的 WebGL 库，纯原生实现
  */
 
-// 全局变量
-var gl;
-var water;
-var cubemap;
-var renderer;
-var angleX = -25;
-var angleY = -200.5;
+var rippleCanvas, rippleGL;
+var rippleProgram;
+var rippleTexture;
+var rippleData;
+var rippleEnabled = true;
+var rippleStrength = 0.02;
+var rippleOpacity = 0.6;
 
-// 水层深度（可通过控制面板调整）
-var waterDepth = 0.2;
-var rippleStrength = 0.01;
-var waterOpacity = 0.7;
-var waterEnabled = true;
+var RIPPLE_SIZE = 128;
 
-// 球体物理
-var center;
-var oldCenter;
-var velocity;
-var gravity;
-var radius = 0.25;
-var paused = false;
-
-// 初始化水效果
-function initWaterEffect() {
+function initRipple() {
+  // 创建 Canvas
+  rippleCanvas = document.createElement('canvas');
+  rippleCanvas.id = 'ripple-bg';
+  rippleCanvas.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;z-index:-1;pointer-events:none;';
+  document.body.insertBefore(rippleCanvas, document.body.firstChild);
+  
+  // 调整大小
+  resizeRipple();
+  window.addEventListener('resize', resizeRipple);
+  
+  // 初始化 WebGL
   try {
-    gl = GL.create();
-    
-    // 使用指定的 canvas
-    var targetCanvas = document.getElementById('water-canvas');
-    if (targetCanvas) {
-      // 将 GL 的 canvas 内容渲染到目标 canvas
+    rippleGL = rippleCanvas.getContext('webgl') || rippleCanvas.getContext('experimental-webgl');
+    if (!rippleGL) {
+      console.log('WebGL not supported, using CSS fallback');
+      cssRippleFallback();
+      return;
     }
     
-    var ratio = window.devicePixelRatio || 1;
-    
-    function onresize() {
-      var width = window.innerWidth;
-      var height = window.innerHeight;
-      gl.canvas.width = width * ratio;
-      gl.canvas.height = height * ratio;
-      gl.canvas.style.width = width + 'px';
-      gl.canvas.style.height = height + 'px';
-      gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
-      gl.matrixMode(gl.PROJECTION);
-      gl.loadIdentity();
-      gl.perspective(45, gl.canvas.width / gl.canvas.height, 0.01, 100);
-      gl.matrixMode(gl.MODELVIEW);
-      draw();
+    // 创建涟漪数据纹理
+    rippleData = new Float32Array(RIPPLE_SIZE * RIPPLE_SIZE * 4);
+    for (var i = 0; i < rippleData.length; i += 4) {
+      rippleData[i] = 0;     // 高度
+      rippleData[i+1] = 0;   // 速度
+      rippleData[i+2] = 0;   // 未使用
+      rippleData[i+3] = 1;   // 常量
     }
     
-    document.body.appendChild(gl.canvas);
-    gl.canvas.style.position = 'fixed';
-    gl.canvas.style.top = '0';
-    gl.canvas.style.left = '0';
-    gl.canvas.style.zIndex = '0';
-    gl.canvas.style.pointerEvents = 'none';
+    rippleTexture = rippleGL.createTexture();
+    rippleGL.bindTexture(rippleGL.TEXTURE_2D, rippleTexture);
+    rippleGL.texImage2D(rippleGL.TEXTURE_2D, 0, rippleGL.RGBA, RIPPLE_SIZE, RIPPLE_SIZE, 0, rippleGL.RGBA, rippleGL.FLOAT, rippleData);
+    rippleGL.texParameteri(rippleGL.TEXTURE_2D, rippleGL.TEXTURE_MIN_FILTER, rippleGL.LINEAR);
+    rippleGL.texParameteri(rippleGL.TEXTURE_2D, rippleGL.TEXTURE_MAG_FILTER, rippleGL.LINEAR);
+    rippleGL.texParameteri(rippleGL.TEXTURE_2D, rippleGL.TEXTURE_WRAP_S, rippleGL.REPEAT);
+    rippleGL.texParameteri(rippleGL.TEXTURE_2D, rippleGL.TEXTURE_WRAP_T, rippleGL.REPEAT);
     
-    gl.clearColor(0.02, 0.04, 0.08, waterOpacity);
+    // 简单的显示 shader
+    var vs = 'attribute vec2 aPos; varying vec2 vUv; void main() { vUv = aPos * 0.5 + 0.5; gl_Position = vec4(aPos, 0, 1); }';
+    var fs = 'precision lowp float; uniform sampler2D uRipple; uniform float uOpacity; varying vec2 vUv; void main() { float h = texture2D(uRipple, vUv).r; vec3 base = vec3(0.04, 0.07, 0.11); vec3 ripple = vec3(0.08, 0.12, 0.16) * abs(h); gl_FragColor = vec4(base + ripple, uOpacity); }';
     
-    water = new Water();
-    renderer = new Renderer();
+    var vsObj = rippleGL.createShader(rippleGL.VERTEX_SHADER);
+    rippleGL.shaderSource(vsObj, vs);
+    rippleGL.compileShader(vsObj);
     
-    // 使用隐藏的图片资源
-    cubemap = new Cubemap({
-      xneg: document.getElementById('xneg'),
-      xpos: document.getElementById('xpos'),
-      yneg: document.getElementById('ypos'),
-      ypos: document.getElementById('ypos'),
-      zneg: document.getElementById('zneg'),
-      zpos: document.getElementById('zpos')
-    });
+    var fsObj = rippleGL.createShader(rippleGL.FRAGMENT_SHADER);
+    rippleGL.shaderSource(fsObj, fs);
+    rippleGL.compileShader(fsObj);
     
-    if (!water.textureA.canDrawTo() || !water.textureB.canDrawTo()) {
-      console.log('Floating-point textures not fully supported, using fallback');
-    }
+    rippleProgram = rippleGL.createProgram();
+    rippleGL.attachShader(rippleProgram, vsObj);
+    rippleGL.attachShader(rippleProgram, fsObj);
+    rippleGL.linkProgram(rippleProgram);
+    rippleGL.useProgram(rippleProgram);
     
-    // 使用自定义深度初始化球体位置
-    center = oldCenter = new GL.Vector(-0.4, waterDepth - 1, 0.2);
-    velocity = new GL.Vector();
-    gravity = new GL.Vector(0, -4, 0);
+    // 创建顶点缓冲
+    var buf = rippleGL.createBuffer();
+    rippleGL.bindBuffer(rippleGL.ARRAY_BUFFER, buf);
+    rippleGL.bufferData(rippleGL.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), rippleGL.STATIC_DRAW);
     
-    // 初始涟漪
-    for (var i = 0; i < 25; i++) {
-      water.addDrop(Math.random() * 2 - 1, Math.random() * 2 - 1, 0.03, (i & 1) ? rippleStrength : -rippleStrength);
-    }
+    var aPos = rippleGL.getAttribLocation(rippleProgram, 'aPos');
+    rippleGL.enableVertexAttribArray(aPos);
+    rippleGL.vertexAttribPointer(aPos, 2, rippleGL.FLOAT, false, 0, 0);
     
-    onresize();
+    // 设置 uniform
+    rippleGL.uniform1i(rippleGL.getUniformLocation(rippleProgram, 'uRipple'), 0);
+    rippleGL.uniform1f(rippleGL.getUniformLocation(rippleProgram, 'uOpacity'), rippleOpacity);
     
     // 动画循环
-    var requestAnimationFrame = window.requestAnimationFrame || window.webkitRequestAnimationFrame || function(callback) { setTimeout(callback, 0); };
-    var prevTime = new Date().getTime();
+    animateRipple();
     
-    function animate() {
-      if (waterEnabled) {
-        var nextTime = new Date().getTime();
-        if (!paused) {
-          update((nextTime - prevTime) / 1000);
-          draw();
-        }
-        prevTime = nextTime;
-      }
-      requestAnimationFrame(animate);
-    }
-    requestAnimationFrame(animate);
-    
-    window.onresize = onresize;
-    
-    // 绑定控制面板事件
-    bindControls();
-    
-    // 定期添加随机涟漪保持水面活跃
+    // 定期添加涟漪
     setInterval(function() {
-      if (waterEnabled && !paused) {
-        water.addDrop(Math.random() * 2 - 1, Math.random() * 2 - 1, 0.03, rippleStrength);
-      }
-    }, 2000);
+      if (rippleEnabled) addRipple(Math.random(), Math.random(), rippleStrength);
+    }, 3000);
     
-    console.log('Water effect initialized successfully');
+    // 鼠标交互
+    document.addEventListener('click', function(e) {
+      if (rippleEnabled) {
+        var x = e.clientX / window.innerWidth;
+        var y = 1 - e.clientY / window.innerHeight;
+        addRipple(x, y, rippleStrength * 2);
+      }
+    });
+    
+    document.addEventListener('mousemove', function(e) {
+      if (rippleEnabled) {
+        var x = e.clientX / window.innerWidth;
+        var y = 1 - e.clientY / window.innerHeight;
+        addRipple(x, y, rippleStrength * 0.3);
+      }
+    });
+    
+    bindRippleControls();
+    console.log('Ripple background initialized');
     
   } catch (e) {
-    console.error('Water effect failed:', e.message);
-    // 隐藏控制面板
-    var control = document.querySelector('.water-control');
-    if (control) control.style.display = 'none';
+    console.log('WebGL ripple failed:', e);
+    cssRippleFallback();
   }
 }
 
-function bindControls() {
-  // 水层深度控制
-  var depthSlider = document.getElementById('water-depth');
-  var depthValue = document.getElementById('depth-value');
-  if (depthSlider) {
-    depthSlider.addEventListener('input', function() {
-      waterDepth = parseFloat(this.value);
-      depthValue.textContent = waterDepth.toFixed(1);
-      // 更新球体位置（球体 y 值影响水面交互）
-      center.y = waterDepth - 1;
-      oldCenter.y = waterDepth - 1;
-    });
+function resizeRipple() {
+  var dpr = Math.min(window.devicePixelRatio || 1, 2);
+  rippleCanvas.width = window.innerWidth * dpr;
+  rippleCanvas.height = window.innerHeight * dpr;
+  rippleCanvas.style.opacity = rippleOpacity;
+  if (rippleGL) {
+    rippleGL.viewport(0, 0, rippleCanvas.width, rippleCanvas.height);
+  }
+}
+
+function addRipple(x, y, strength) {
+  // 在纹理上添加涟漪
+  var px = Math.floor(x * RIPPLE_SIZE);
+  var py = Math.floor(y * RIPPLE_SIZE);
+  
+  // 添加高度扰动
+  for (var dy = -2; dy <= 2; dy++) {
+    for (var dx = -2; dx <= 2; dx++) {
+      var idx = ((py + dy) * RIPPLE_SIZE + (px + dx)) * 4;
+      if (idx >= 0 && idx < rippleData.length) {
+        var dist = Math.sqrt(dx*dx + dy*dy);
+        rippleData[idx] += strength * (1 - dist/3);
+      }
+    }
   }
   
-  // 涟漪强度控制
-  var rippleSlider = document.getElementById('ripple-strength');
-  var rippleValue = document.getElementById('ripple-value');
-  if (rippleSlider) {
-    rippleSlider.addEventListener('input', function() {
+  // 更新纹理
+  rippleGL.bindTexture(rippleGL.TEXTURE_2D, rippleTexture);
+  rippleGL.texSubImage2D(rippleGL.TEXTURE_2D, 0, 0, 0, RIPPLE_SIZE, RIPPLE_SIZE, rippleGL.RGBA, rippleGL.FLOAT, rippleData);
+}
+
+function animateRipple() {
+  if (rippleEnabled) {
+    // 模拟涟漪传播（简化版）
+    var newData = new Float32Array(rippleData.length);
+    for (var y = 1; y < RIPPLE_SIZE - 1; y++) {
+      for (var x = 1; x < RIPPLE_SIZE - 1; x++) {
+        var idx = (y * RIPPLE_SIZE + x) * 4;
+        var h = rippleData[idx];
+        var v = rippleData[idx + 1];
+        
+        // 从周围采样
+        var h_avg = (rippleData[idx - 4] + rippleData[idx + 4] + rippleData[idx - RIPPLE_SIZE*4] + rippleData[idx + RIPPLE_SIZE*4]) / 4;
+        
+        // 更新速度和高度
+        v += (h_avg - h) * 0.5;
+        v *= 0.95; // 阻尼
+        h += v;
+        
+        newData[idx] = h;
+        newData[idx + 1] = v;
+      }
+    }
+    rippleData = newData;
+    
+    // 更新纹理
+    rippleGL.bindTexture(rippleGL.TEXTURE_2D, rippleTexture);
+    rippleGL.texSubImage2D(rippleGL.TEXTURE_2D, 0, 0, 0, RIPPLE_SIZE, RIPPLE_SIZE, rippleGL.RGBA, rippleGL.FLOAT, rippleData);
+    
+    // 绘制
+    rippleGL.clear(rippleGL.COLOR_BUFFER_BIT);
+    rippleGL.activeTexture(rippleGL.TEXTURE0);
+    rippleGL.bindTexture(rippleGL.TEXTURE_2D, rippleTexture);
+    rippleGL.drawArrays(rippleGL.TRIANGLE_STRIP, 0, 4);
+  }
+  
+  requestAnimationFrame(animateRipple);
+}
+
+function bindRippleControls() {
+  var strengthSlider = document.getElementById('ripple-strength');
+  var strengthValue = document.getElementById('ripple-value');
+  if (strengthSlider) {
+    strengthSlider.addEventListener('input', function() {
       rippleStrength = parseFloat(this.value);
-      rippleValue.textContent = rippleStrength.toFixed(3);
+      strengthValue.textContent = rippleStrength.toFixed(3);
     });
   }
   
-  // 透明度控制
   var opacitySlider = document.getElementById('water-opacity');
   var opacityValue = document.getElementById('opacity-value');
   if (opacitySlider) {
     opacitySlider.addEventListener('input', function() {
-      waterOpacity = parseFloat(this.value);
-      opacityValue.textContent = Math.round(waterOpacity * 100) + '%';
-      gl.clearColor(0.02, 0.04, 0.08, waterOpacity);
+      rippleOpacity = parseFloat(this.value);
+      opacityValue.textContent = Math.round(rippleOpacity * 100) + '%';
+      rippleCanvas.style.opacity = rippleOpacity;
     });
   }
   
-  // 开关按钮
   var toggleBtn = document.getElementById('toggle-water');
   if (toggleBtn) {
     toggleBtn.addEventListener('click', function() {
-      waterEnabled = !waterEnabled;
-      this.textContent = waterEnabled ? '关闭水效果' : '开启水效果';
-      gl.canvas.style.opacity = waterEnabled ? waterOpacity : 0;
+      rippleEnabled = !rippleEnabled;
+      this.textContent = rippleEnabled ? '关闭水效果' : '开启水效果';
+      rippleCanvas.style.opacity = rippleEnabled ? rippleOpacity : 0;
     });
   }
 }
 
-function update(seconds) {
-  if (seconds > 1) return;
+function cssRippleFallback() {
+  // CSS 渐变动画作为后备
+  rippleCanvas.style.background = 'linear-gradient(135deg, rgba(10,20,30,0.6), rgba(20,40,60,0.6))';
+  rippleCanvas.style.animation = 'ripple-move 10s infinite';
   
-  // 球体在水中的物理模拟
-  if (true) { // 始终启用物理模拟
-    var percentUnderWater = Math.max(0, Math.min(1, (radius - center.y) / (2 * radius)));
-    velocity = velocity.add(gravity.multiply(seconds - 1.1 * seconds * percentUnderWater));
-    velocity = velocity.subtract(velocity.unit().multiply(percentUnderWater * seconds * velocity.dot(velocity)));
-    center = center.add(velocity.multiply(seconds));
-    
-    // 保持在水层深度范围内
-    if (center.y < waterDepth - 1) {
-      center.y = waterDepth - 1;
-      velocity.y = Math.abs(velocity.y) * 0.5;
-    }
-    if (center.y > 2) {
-      center.y = 2;
-      velocity.y = -Math.abs(velocity.y) * 0.5;
-    }
+  var style = document.createElement('style');
+  style.textContent = '@keyframes ripple-move { 0%, 100% { opacity: 0.5; } 50% { opacity: 0.7; } }';
+  document.head.appendChild(style);
+}
+
+// 隐藏不需要的控制
+document.addEventListener('DOMContentLoaded', function() {
+  var depthCtrl = document.querySelector('#water-depth');
+  if (depthCtrl && depthCtrl.parentElement) {
+    depthCtrl.parentElement.style.display = 'none';
   }
-  
-  water.moveSphere(oldCenter, center, radius);
-  oldCenter = center;
-  
-  water.stepSimulation();
-  water.stepSimulation();
-  water.updateNormals();
-  renderer.updateCaustics(water);
-}
+});
 
-function draw() {
-  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-  gl.loadIdentity();
-  gl.translate(0, 0, -5); // 更远的视角，适合背景
-  gl.rotate(-angleX, 1, 0, 0);
-  gl.rotate(-angleY, 0, 1, 0);
-  gl.translate(0, 0.3, 0); // 稍微上移
-  
-  gl.enable(gl.DEPTH_TEST);
-  renderer.sphereCenter = center;
-  renderer.sphereRadius = radius;
-  renderer.renderCube();
-  renderer.renderWater(water, cubemap);
-  renderer.renderSphere();
-  gl.disable(gl.DEPTH_TEST);
-}
-
-// 页面加载完成后初始化
 window.addEventListener('load', function() {
-  // 等待图片资源加载
-  setTimeout(initWaterEffect, 500);
+  setTimeout(initRipple, 300);
 });
