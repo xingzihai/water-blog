@@ -37,8 +37,8 @@ window.onload = function() {
     gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
     gl.matrixMode(gl.PROJECTION);
     gl.loadIdentity();
-    // 调整 FOV 让立方体填满视口
-    gl.perspective(60, gl.canvas.width / gl.canvas.height, 0.01, 100);
+    // 透视投影，大 FOV 让水面填满视口
+    gl.perspective(100, gl.canvas.width / gl.canvas.height, 0.01, 100);
     gl.matrixMode(gl.MODELVIEW);
     draw();
   }
@@ -127,18 +127,17 @@ function draw() {
   gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
   gl.loadIdentity();
   
-  // 相机位置 - 从上方俯视，距离根据水层深度调整
-  gl.translate(0, -waterDepth, -2.5);
-  gl.rotate(-angleX, 1, 0, 0);
-  gl.rotate(-angleY, 0, 1, 0);
+  // 相机位置 - 俯视水面，让水面填满视口边界
+  gl.translate(0, 0, -1.0);  // 非近的距离
+  gl.rotate(-89.5, 1, 0, 0);  // 几乎完全俯视
   
   gl.enable(gl.DEPTH_TEST);
   
-  // 设置球体位置（但不渲染）
-  renderer.sphereCenter = new GL.Vector(0, 10, 0);  // 移到远处不可见
-  renderer.sphereRadius = 0.01;  // 极小
+  // 设置球体位置（移到远处不可见）
+  renderer.sphereCenter = new GL.Vector(0, 100, 0);
+  renderer.sphereRadius = 0.001;
   
-  // 渲染水面（使用页面边界作为立方体边界）
+  // 渲染水面（页面边界作为立方体边界）
   renderer.renderWater(water, cubemap);
   
   gl.disable(gl.DEPTH_TEST);
